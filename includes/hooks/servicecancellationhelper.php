@@ -69,16 +69,16 @@ function invoice_cancellation_helper_event($vars) {
             $notes .= "\nService cancelled by {$username} on {$date}";
         }
 
-        # Add cancellation note to main service
+        # Add cancellation note to main service + remove subscription ID (don't think this actually cancels the subscription though? Hmm...)
         try {
 
             Capsule::table('tblhosting')->where('id', $vars['serviceid'])->update([
-                'notes' => $notes,
-                'subscriptionid' => '',
+                'notes'             => $notes,
+                'subscriptionid'    => '',
             ]);
         
         } catch (\Exception $e) {
-            // Possibly log this error?
+            // Possibly log this error? I feel a todo-nt today.
         }
 
         # check and see if there are any addons related to main service
@@ -88,7 +88,7 @@ function invoice_cancellation_helper_event($vars) {
             foreach (Capsule::table('tblhostingaddons')->where('hostingid', $vars['serviceid'])->get() as $addon) {
 
                 # only cancel if they aren't already cancelled
-                if ($addon->status != "Cancelled") { 
+                if ($addon->status != 'Cancelled') { 
 
                     # Get current notes on the addon module
                     $notes = $addon->notes;
@@ -108,7 +108,7 @@ function invoice_cancellation_helper_event($vars) {
                             'notes'             => $notes
                         ]);
                     } catch (\Exception $e) {
-                        // Possibly log this error?
+                        // Possibly log this error? I'm banning the use of the word 'todo'
                     }
 
                 }
@@ -168,7 +168,7 @@ function invoice_cancellation_helper_event($vars) {
                 ]);
 
             } catch (\Exception $e) {
-                // Possibly log this error?
+                // Possibly log this error? ....todo?
             }
 
             # If there are items on the invoice that arent related to the service or its addons, we need to split the invoices. This is messy, WHMCS don't provide an API function to split the invoice?!
@@ -200,7 +200,7 @@ function invoice_cancellation_helper_event($vars) {
                         ]);
                     
                     } catch(\Exception $e) {
-                        // Possibly log this error?
+                        // Possibly log this error? No more todos. None. Nada.
                     }
 
                 }
@@ -272,7 +272,7 @@ function updateTheTotals($invoice, $items) {
         ]);
     
     } catch(\Exception $e) {
-        // Possibly log this error?
+        // Possibly log this error? Threedo? Sounds a bit off, todo does sound better.
     }
 
 }
