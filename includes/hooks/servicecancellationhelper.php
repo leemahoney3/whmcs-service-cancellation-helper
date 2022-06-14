@@ -19,7 +19,7 @@ use WHMCS\Database\Capsule;
  * @author     Lee Mahoney <lee@leemahoney.dev>
  * @copyright  Copyright (c) Lee Mahoney 2022
  * @license    MIT License
- * @version    0.0.1
+ * @version    0.0.2
  * @link       https://leemahoney.dev
  */
 
@@ -42,8 +42,12 @@ function invoice_cancellation_helper_event($vars) {
     # Grab information on the service
     $serviceData = Capsule::table('tblhosting')->where('id', $vars['serviceid'])->first();
 
-    # Let's make sure the status has been set to Cancelled (because this hook is for editing the service in general)
-    if ($serviceData->domainstatus == "Cancelled") { 
+    # Let's check to see if the service isn't already cancelled, if it is then the rest of this hook can be skipped.
+
+    $currentStatus  = $serviceData->domainstatus;
+    $newStatus      = $_POST['domainstatus'];
+
+    if ($newStatus == "Cancelled" && $currentStatus != "Cancelled") { 
 
         # Loop through related addons and add them to array
         foreach (Capsule::table('tblhostingaddons')->where('hostingid', $vars['serviceid'])->get() as $addon) {
@@ -53,32 +57,36 @@ function invoice_cancellation_helper_event($vars) {
         # Note keeping, let's grab a couple of things we'll need to make the note.
         $fieldName = 'Cancellation Ticket ID';
 
-        $fieldID        = Capsule::table('tblcustomfields')->where(['fieldname' => $fieldName, 'type' => 'product', 'relid' => $serviceData->id])->first()->id;
+        $fieldID        = Capsule::table('tblcustomfields')->where(['fieldname' => $fieldName, 'type' => 'product'])->first()->id;
         $ticketID       = Capsule::table('tblcustomfieldsvalues')->where(['fieldid' => $fieldID, 'relid' => $vars['serviceid']])->first()->value;
         $date           = date('d/m/Y');
         $currentUser    = new \WHMCS\Authentication\CurrentUser;
         $username       = $currentUser->admin()->username;
 
-        # Grab current notes (let's not delete them o.O)
-        $notes = $serviceData->notes;
-
         # Check if ticket ID was entered into the custom field
+
         if ($ticketID) {
-            $notes .= "\nService cancelled by {$username} on {$date} through ticket {$ticketID}";
+            $notes = "\nService cancelled by {$username} on {$date} through ticket {$ticketID}";
+        } else if(!empty($_POST['customfield'][$fieldID])) {
+
+            $field  = htmlspecialchars($_POST['customfield'][$fieldID]);
+            $notes = "\nService cancelled by {$username} on {$date} through ticket {$field}";
+
         } else {
-            $notes .= "\nService cancelled by {$username} on {$date}";
+            $notes = "\nService cancelled by {$username} on {$date}";
         }
 
-        # Add cancellation note to main service + remove subscription ID (don't think this actually cancels the subscription though? Hmm...)
-        try {
-
-            Capsule::table('tblhosting')->where('id', $vars['serviceid'])->update([
-                'notes'             => $notes,
-                'subscriptionid'    => '',
-            ]);
+        # Workaround for the notes, can't really think of a better way to do this yet.
+        $_SESSION['csh_notes'] = $notes;
         
-        } catch (\Exception $e) {
-            // Possibly log this error? I feel a todo-nt today.
+        if ($serviceData->subscriptionid) {
+            
+            try {
+                cancelSubscriptionForService($serviceData->id);
+            } catch (Exception $e) {
+                logActivity("Unable to cancel subscription on service #{$serviceData->id}. Reason: {$e->getMessage()}", 0);
+            }
+
         }
 
         # check and see if there are any addons related to main service
@@ -96,6 +104,10 @@ function invoice_cancellation_helper_event($vars) {
                     # Again check if a ticket ID was entered on the MAIN SERVICE custom field. Not related to the ticket ID custom field on the addon, thats only for cancelling the addons individually.
                     if ($ticketID) {
                         $notes .= "\nService cancelled by {$username} on {$date} through ticket {$ticketID}";
+                    } else if(!empty($_POST['customfield'][$fieldID])) {
+            
+                        $field  = htmlspecialchars($_POST['customfield'][$fieldID]);
+                        $notes .= "\nService cancelled by {$username} on {$date} through ticket {$field}";
                     } else {
                         $notes .= "\nService cancelled by {$username} on {$date}";
                     }
@@ -108,7 +120,16 @@ function invoice_cancellation_helper_event($vars) {
                             'notes'             => $notes
                         ]);
                     } catch (\Exception $e) {
-                        // Possibly log this error? I'm banning the use of the word 'todo'
+                        logActivity("Failed to cancel addon #{$addon->id}. Reason: {$e->getMessage()}", 0);
+                    }
+
+                    if ($addon->subscriptionid) {
+                        try {
+                            cancelSubscriptionForService($addon->id);
+                        } catch (Exception $e) {
+                            logActivity("Unable to cancel subscription on addon #{$addon->id}. Reason: {$e->getMessage()}", 0);
+                        }
+
                     }
 
                 }
@@ -168,7 +189,7 @@ function invoice_cancellation_helper_event($vars) {
                 ]);
 
             } catch (\Exception $e) {
-                // Possibly log this error? ....todo?
+                logActivity("Unable to cancel invoice #{$userInvoice->id} for service #{$vars['serviceid']}. Reason: {$e->getMessage()}", 0);
             }
 
             # If there are items on the invoice that arent related to the service or its addons, we need to split the invoices. This is messy, WHMCS don't provide an API function to split the invoice?!
@@ -201,6 +222,7 @@ function invoice_cancellation_helper_event($vars) {
                     
                     } catch(\Exception $e) {
                         // Possibly log this error? No more todos. None. Nada.
+                        logActivity("Failed to add new invoice items to invoice #{$newInvoiceID}. Reason: {$e->getMessage()}", 0);
                     }
 
                 }
@@ -237,6 +259,7 @@ function invoice_cancellation_helper_event($vars) {
  * @param  mixed $items
  * @return void
  */
+
 function updateTheTotals($invoice, $items) {
 
     $subTotal = 0;
@@ -273,6 +296,7 @@ function updateTheTotals($invoice, $items) {
     
     } catch(\Exception $e) {
         // Possibly log this error? Threedo? Sounds a bit off, todo does sound better.
+        logActivity("Unable to update totals on invoice #{$invoice->id}. Reason: {$e->getMessage()}", 0);
     }
 
 }
@@ -286,4 +310,20 @@ function updateTheTotals($invoice, $items) {
  *
  * @return This depends on the hook function point.
  */
-add_hook('AdminServiceEdit', 1, 'invoice_cancellation_helper_event');
+add_hook('PreServiceEdit', 1, 'invoice_cancellation_helper_event');
+
+add_hook('ServiceEdit', 1, function($vars) {
+    
+    if(isset($_SESSION['csh_notes']) && !empty($_SESSION['csh_notes'])) {
+
+        $currentNotes = Capsule::table('tblhosting')->where('id', $vars['serviceid'])->first()->notes;
+
+        Capsule::table('tblhosting')->where('id', $vars['serviceid'])->update([
+            'notes' => $currentNotes . $_SESSION['csh_notes']
+        ]);
+
+        unset($_SESSION['csh_notes']);
+
+    }
+
+});
