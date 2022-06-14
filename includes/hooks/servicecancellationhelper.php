@@ -312,6 +312,7 @@ function updateTheTotals($invoice, $items) {
  */
 add_hook('PreServiceEdit', 1, 'invoice_cancellation_helper_event');
 
+# The downside of hooks, no ability to share variables between them.
 add_hook('ServiceEdit', 1, function($vars) {
     
     if(isset($_SESSION['csh_notes']) && !empty($_SESSION['csh_notes'])) {
