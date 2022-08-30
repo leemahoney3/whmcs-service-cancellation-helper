@@ -19,7 +19,7 @@ use WHMCS\Database\Capsule;
  * @author     Lee Mahoney <lee@leemahoney.dev>
  * @copyright  Copyright (c) Lee Mahoney 2022
  * @license    MIT License
- * @version    0.0.2
+ * @version    1.0.2
  * @link       https://leemahoney.dev
  */
 
@@ -81,11 +81,17 @@ function invoice_cancellation_helper_event($vars) {
         
         if ($serviceData->subscriptionid) {
             
-            try {
-                cancelSubscriptionForService($serviceData->id);
-            } catch (Exception $e) {
-                logActivity("Unable to cancel subscription on service #{$serviceData->id}. Reason: {$e->getMessage()}", 0);
+            $gateway = new \WHMCS\Module\Gateway;
+
+            $gateway->load($serviceData->paymentmethod);
+
+            if ($gateway->functionExists('cancelSubscription')) {
+                $gateway->call('cancelSubscription', ['subscriptionID' => $serviceData->subscriptionid]);
             }
+
+            Capsule::table('tblhosting')->where('id', $serviceData->id)->update([
+                'subscriptionid' => ''
+            ]);
 
         }
 
@@ -120,15 +126,23 @@ function invoice_cancellation_helper_event($vars) {
                             'notes'             => $notes
                         ]);
                     } catch (\Exception $e) {
+                        // Possibly log this error? I'm banning the use of the word 'todo'
                         logActivity("Failed to cancel addon #{$addon->id}. Reason: {$e->getMessage()}", 0);
                     }
 
                     if ($addon->subscriptionid) {
-                        try {
-                            cancelSubscriptionForService($addon->id);
-                        } catch (Exception $e) {
-                            logActivity("Unable to cancel subscription on addon #{$addon->id}. Reason: {$e->getMessage()}", 0);
+
+                        $gateway = new \WHMCS\Module\Gateway;
+
+                        $gateway->load($addon->paymentmethod);
+
+                        if ($gateway->functionExists('cancelSubscription')) {
+                            $gateway->call('cancelSubscription', ['subscriptionID' => $addon->subscriptionid]);
                         }
+
+                        Capsule::table('tblhostingaddons')->where('id', $addon->id)->update([
+                            'subscriptionid' => ''
+                        ]);
 
                     }
 
@@ -295,7 +309,6 @@ function updateTheTotals($invoice, $items) {
         ]);
     
     } catch(\Exception $e) {
-        // Possibly log this error? Threedo? Sounds a bit off, todo does sound better.
         logActivity("Unable to update totals on invoice #{$invoice->id}. Reason: {$e->getMessage()}", 0);
     }
 
