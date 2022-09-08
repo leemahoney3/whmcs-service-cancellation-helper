@@ -102,49 +102,49 @@ function invoice_cancellation_helper_event($vars) {
             foreach (Capsule::table('tblhostingaddons')->where('hostingid', $vars['serviceid'])->get() as $addon) {
 
                 # only cancel if they aren't already cancelled
-                if ($addon->status != 'Cancelled') { 
+                if ($addon->status == 'Cancelled') {
+                    continue;
+                } 
 
-                    # Get current notes on the addon module
-                    $notes = $addon->notes;
+                # Get current notes on the addon module
+                $notes = $addon->notes;
 
-                    # Again check if a ticket ID was entered on the MAIN SERVICE custom field. Not related to the ticket ID custom field on the addon, thats only for cancelling the addons individually.
-                    if ($ticketID) {
-                        $notes .= "\nService cancelled by {$username} on {$date} through ticket {$ticketID}";
-                    } else if(!empty($_POST['customfield'][$fieldID])) {
-            
-                        $field  = htmlspecialchars($_POST['customfield'][$fieldID]);
-                        $notes .= "\nService cancelled by {$username} on {$date} through ticket {$field}";
-                    } else {
-                        $notes .= "\nService cancelled by {$username} on {$date}";
+                # Again check if a ticket ID was entered on the MAIN SERVICE custom field. Not related to the ticket ID custom field on the addon, thats only for cancelling the addons individually.
+                if ($ticketID) {
+                    $notes .= "\nService cancelled by {$username} on {$date} through ticket {$ticketID}";
+                } else if(!empty($_POST['customfield'][$fieldID])) {
+        
+                    $field  = htmlspecialchars($_POST['customfield'][$fieldID]);
+                    $notes .= "\nService cancelled by {$username} on {$date} through ticket {$field}";
+                } else {
+                    $notes .= "\nService cancelled by {$username} on {$date}";
+                }
+                
+                # Cancel the addon and update the notes
+                try {
+                    Capsule::table('tblhostingaddons')->where('id', $addon->id)->update([
+                        'status'            => 'Cancelled',
+                        'termination_date'  => date('Y-m-d'),
+                        'notes'             => $notes
+                    ]);
+                } catch (\Exception $e) {
+                    // Possibly log this error? I'm banning the use of the word 'todo'
+                    logActivity("Failed to cancel addon #{$addon->id}. Reason: {$e->getMessage()}", 0);
+                }
+
+                if ($addon->subscriptionid) {
+
+                    $gateway = new \WHMCS\Module\Gateway;
+
+                    $gateway->load($addon->paymentmethod);
+
+                    if ($gateway->functionExists('cancelSubscription')) {
+                        $gateway->call('cancelSubscription', ['subscriptionID' => $addon->subscriptionid]);
                     }
-                    
-                    # Cancel the addon and update the notes
-                    try {
-                        Capsule::table('tblhostingaddons')->where('id', $addon->id)->update([
-                            'status'            => 'Cancelled',
-                            'termination_date'  => date('Y-m-d'),
-                            'notes'             => $notes
-                        ]);
-                    } catch (\Exception $e) {
-                        // Possibly log this error? I'm banning the use of the word 'todo'
-                        logActivity("Failed to cancel addon #{$addon->id}. Reason: {$e->getMessage()}", 0);
-                    }
 
-                    if ($addon->subscriptionid) {
-
-                        $gateway = new \WHMCS\Module\Gateway;
-
-                        $gateway->load($addon->paymentmethod);
-
-                        if ($gateway->functionExists('cancelSubscription')) {
-                            $gateway->call('cancelSubscription', ['subscriptionID' => $addon->subscriptionid]);
-                        }
-
-                        Capsule::table('tblhostingaddons')->where('id', $addon->id)->update([
-                            'subscriptionid' => ''
-                        ]);
-
-                    }
+                    Capsule::table('tblhostingaddons')->where('id', $addon->id)->update([
+                        'subscriptionid' => ''
+                    ]);
 
                 }
 
