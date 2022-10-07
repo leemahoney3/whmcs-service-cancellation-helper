@@ -1,6 +1,13 @@
 <?php
 
-use WHMCS\Database\Capsule;
+use WHMCS\CustomField;
+use WHMCS\Service\Addon;
+use WHMCS\Module\Gateway;
+use WHMCS\Billing\Invoice;
+use WHMCS\Service\Service;
+use WHMCS\Authentication\CurrentUser;
+use WHMCS\CustomField\CustomFieldValue;
+use WHMCS\Billing\Invoice\Item as InvoiceItem;
 
 /**
  * Service Cancellation Helper Hook
@@ -19,7 +26,7 @@ use WHMCS\Database\Capsule;
  * @author     Lee Mahoney <lee@leemahoney.dev>
  * @copyright  Copyright (c) Lee Mahoney 2022
  * @license    MIT License
- * @version    1.0.2
+ * @version    1.0.3
  * @link       https://leemahoney.dev
  */
 
@@ -27,6 +34,9 @@ use WHMCS\Database\Capsule;
 if (!defined('WHMCS')) {
     die('You cannot access this file directly.');
 }
+
+$customFieldName            = 'Cancellation Ticket ID';
+$allowCancellationOfAddons  = true;
 
 /**
  * invoice_cancellation_helper_event
@@ -40,7 +50,7 @@ function invoice_cancellation_helper_event($vars) {
     $addons = [];
 
     # Grab information on the service
-    $serviceData = Capsule::table('tblhosting')->where('id', $vars['serviceid'])->first();
+    $serviceData = Service::where('id', $vars['serviceid'])->first();
 
     # Let's check to see if the service isn't already cancelled, if it is then the rest of this hook can be skipped.
 
@@ -50,23 +60,29 @@ function invoice_cancellation_helper_event($vars) {
     if ($newStatus == "Cancelled" && $currentStatus != "Cancelled") { 
 
         # Loop through related addons and add them to array
-        foreach (Capsule::table('tblhostingaddons')->where('hostingid', $vars['serviceid'])->get() as $addon) {
+        foreach (Addon::where('hostingid', $vars['serviceid'])->get() as $addon) {
+            
+            if (!$allowCancellationOfAddons) {
+                continue;
+            }
+
             $addons[] = $addon->id;
+
         }
 
         # Note keeping, let's grab a couple of things we'll need to make the note.
-        $fieldName = 'Cancellation Ticket ID';
-
-        $fieldID        = Capsule::table('tblcustomfields')->where(['fieldname' => $fieldName, 'type' => 'product'])->first()->id;
-        $ticketID       = Capsule::table('tblcustomfieldsvalues')->where(['fieldid' => $fieldID, 'relid' => $vars['serviceid']])->first()->value;
+        
+        $fieldID        = CustomField::where(['fieldname' => $customFieldName, 'type' => 'product'])->first()->id;
+        $ticketID       = CustomFieldValue::where(['fieldid' => $fieldID, 'relid' => $vars['serviceid']])->first()->value;
         $date           = date('d/m/Y');
-        $currentUser    = new \WHMCS\Authentication\CurrentUser;
+        $currentUser    = new CurrentUser;
         $username       = $currentUser->admin()->username;
 
         # Check if ticket ID was entered into the custom field
-
         if ($ticketID) {
+
             $notes = "\nService cancelled by {$username} on {$date} through ticket {$ticketID}";
+        
         } else if(!empty($_POST['customfield'][$fieldID])) {
 
             $field  = htmlspecialchars($_POST['customfield'][$fieldID]);
@@ -81,7 +97,7 @@ function invoice_cancellation_helper_event($vars) {
         
         if ($serviceData->subscriptionid) {
             
-            $gateway = new \WHMCS\Module\Gateway;
+            $gateway = new Gateway;
 
             $gateway->load($serviceData->paymentmethod);
 
@@ -89,7 +105,7 @@ function invoice_cancellation_helper_event($vars) {
                 $gateway->call('cancelSubscription', ['subscriptionID' => $serviceData->subscriptionid]);
             }
 
-            Capsule::table('tblhosting')->where('id', $serviceData->id)->update([
+            Service::where('id', $serviceData->id)->update([
                 'subscriptionid' => ''
             ]);
 
@@ -99,42 +115,46 @@ function invoice_cancellation_helper_event($vars) {
         if (!empty($addons)) {
 
             # if so loop through them and cancelled them while adding a note
-            foreach (Capsule::table('tblhostingaddons')->where('hostingid', $vars['serviceid'])->get() as $addon) {
+            foreach (Addon::where('hostingid', $vars['serviceid'])->get() as $addon) {
 
                 # only cancel if they aren't already cancelled
-                if ($addon->status == 'Cancelled') {
+                if ($addon->status == 'Cancelled') { 
                     continue;
-                } 
+                }
 
                 # Get current notes on the addon module
                 $notes = $addon->notes;
 
                 # Again check if a ticket ID was entered on the MAIN SERVICE custom field. Not related to the ticket ID custom field on the addon, thats only for cancelling the addons individually.
                 if ($ticketID) {
+
                     $notes .= "\nService cancelled by {$username} on {$date} through ticket {$ticketID}";
+                
                 } else if(!empty($_POST['customfield'][$fieldID])) {
         
                     $field  = htmlspecialchars($_POST['customfield'][$fieldID]);
                     $notes .= "\nService cancelled by {$username} on {$date} through ticket {$field}";
+
                 } else {
                     $notes .= "\nService cancelled by {$username} on {$date}";
                 }
                 
                 # Cancel the addon and update the notes
                 try {
-                    Capsule::table('tblhostingaddons')->where('id', $addon->id)->update([
+
+                    Addon::where('id', $addon->id)->update([
                         'status'            => 'Cancelled',
                         'termination_date'  => date('Y-m-d'),
                         'notes'             => $notes
                     ]);
+                    
                 } catch (\Exception $e) {
-                    // Possibly log this error? I'm banning the use of the word 'todo'
                     logActivity("Failed to cancel addon #{$addon->id}. Reason: {$e->getMessage()}", 0);
                 }
 
                 if ($addon->subscriptionid) {
 
-                    $gateway = new \WHMCS\Module\Gateway;
+                    $gateway = new Gateway;
 
                     $gateway->load($addon->paymentmethod);
 
@@ -142,7 +162,7 @@ function invoice_cancellation_helper_event($vars) {
                         $gateway->call('cancelSubscription', ['subscriptionID' => $addon->subscriptionid]);
                     }
 
-                    Capsule::table('tblhostingaddons')->where('id', $addon->id)->update([
+                    Addon::where('id', $addon->id)->update([
                         'subscriptionid' => ''
                     ]);
 
@@ -153,7 +173,7 @@ function invoice_cancellation_helper_event($vars) {
         }
 
         # loop through invoices for the user that are set as unpaid
-        foreach (Capsule::table('tblinvoices')->where(['userid' => $serviceData->userid, 'status' => 'Unpaid'])->get() as $userInvoice) {
+        foreach (Invoice::where(['userid' => $serviceData->userid, 'status' => 'Unpaid'])->get() as $userInvoice) {
             
             # Create two arrays, one to hold related invoice items (to the addon. Actually it should just be the addon ^_^) and one to hold all unrelated invoice items
             $related    = [];
@@ -164,11 +184,12 @@ function invoice_cancellation_helper_event($vars) {
 
 
             # count invoice items that match the invoice id
-            $invoiceItemCount = Capsule::table('tblinvoiceitems')->where('invoiceid', $userInvoice->id)->count();
+            $invoiceItems = InvoiceItem::where('invoiceid', $userInvoice->id)->get();
+            $invoiceItemCount = count($invoiceItems);
 
 
             # Loop through invoice items that match the invoice id
-            foreach (Capsule::table('tblinvoiceitems')->where('invoiceid', $userInvoice->id)->get() as $invoiceItem) {
+            foreach ($invoiceItems as $invoiceItem) {
 
                 # If we have addons then we can do a check to see if the relid on the invoice item matches either the main service ID or one of the addon ID's
                 if (!empty($addons)) {
@@ -197,7 +218,7 @@ function invoice_cancellation_helper_event($vars) {
             # Cancel the invoice
             try {
 
-                Capsule::table('tblinvoices')->where('id', $userInvoice->id)->update([
+                Invoice::where('id', $userInvoice->id)->update([
                     'date_cancelled'    => date('Y-m-d H:i:s'),
                     'status'            => 'Cancelled',
                 ]);
@@ -222,7 +243,7 @@ function invoice_cancellation_helper_event($vars) {
                     'duedate'       => $userInvoice->duedate,
                 ];
 
-                $result         = localAPI($command, $postData, $currentUser->admin()->username);
+                $result         = localAPI($command, $postData);
                 $newInvoiceID   = $result['invoiceid'];
 
                 # Loop through invoice line items in the unrelated array and update them to the new invoice ID
@@ -230,7 +251,7 @@ function invoice_cancellation_helper_event($vars) {
 
                     try {
 
-                        Capsule::table('tblinvoiceitems')->where('id', $id)->update([
+                        InvoiceItem::where('id', $id)->update([
                             'invoiceid' => $newInvoiceID,
                         ]);
                     
@@ -242,7 +263,7 @@ function invoice_cancellation_helper_event($vars) {
                 }
 
                 # Update the subtotal on the invoice
-                $newInvoice = Capsule::table('tblinvoices')->where('id', $newInvoiceID)->first();
+                $newInvoice = Invoice::where('id', $newInvoiceID)->first();
                 updateTheTotals($newInvoice, $unrelated);
 
                 # Update the old invoice's subtotal (as it would be still what it was before we moved the items off, surprised whmcs hardcodes this to the database still!)
@@ -283,7 +304,7 @@ function updateTheTotals($invoice, $items) {
     foreach ($items as $item) {
 
         # Add amount of each item to the sub total of the invoice
-        $itemData = Capsule::table('tblinvoiceitems')->where('id', $item)->first();
+        $itemData = InvoiceItem::where('id', $item)->first();
         $subTotal += $itemData->amount;
 
     }
@@ -301,11 +322,11 @@ function updateTheTotals($invoice, $items) {
     # Update the values on the invoice
     try {
 
-        Capsule::table('tblinvoices')->where('id', $invoice->id)->update([
-            'subTotal' => $subTotal,
-            'tax' => $tax,
-            'tax2' => $tax2,
-            'total'    => $total,
+        Invoice::where('id', $invoice->id)->update([
+            'subTotal'  => $subTotal,
+            'tax'       => $tax,
+            'tax2'      => $tax2,
+            'total'     => $total,
         ]);
     
     } catch(\Exception $e) {
@@ -330,9 +351,9 @@ add_hook('ServiceEdit', 1, function($vars) {
     
     if(isset($_SESSION['csh_notes']) && !empty($_SESSION['csh_notes'])) {
 
-        $currentNotes = Capsule::table('tblhosting')->where('id', $vars['serviceid'])->first()->notes;
+        $currentNotes = Service::where('id', $vars['serviceid'])->first()->notes;
 
-        Capsule::table('tblhosting')->where('id', $vars['serviceid'])->update([
+        Service::where('id', $vars['serviceid'])->update([
             'notes' => $currentNotes . $_SESSION['csh_notes']
         ]);
 
