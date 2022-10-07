@@ -277,7 +277,7 @@ function invoice_cancellation_helper_event($vars) {
                     'id' => $newInvoiceID,
                 );
 
-                $results = localAPI($command, $postData, $currentUser->admin()->username);
+                $results = localAPI($command, $postData);
 
             }
 
