@@ -149,7 +149,7 @@ function invoice_cancellation_helper_event($vars) {
                     ]);
                     
                 } catch (\Exception $e) {
-                    logActivity("Failed to cancel addon #{$addon->id}. Reason: {$e->getMessage()}", 0);
+                    logActivity("Failed to cancel addon #{$addon->id}. Reason: {$e->getMessage()}", $addon->userid);
                 }
 
                 if ($addon->subscriptionid) {
@@ -224,7 +224,7 @@ function invoice_cancellation_helper_event($vars) {
                 ]);
 
             } catch (\Exception $e) {
-                logActivity("Unable to cancel invoice #{$userInvoice->id} for service #{$vars['serviceid']}. Reason: {$e->getMessage()}", 0);
+                logActivity("Unable to cancel invoice #{$userInvoice->id} for service #{$vars['serviceid']}. Reason: {$e->getMessage()}", $userInvoice->userid);
             }
 
             # If there are items on the invoice that arent related to the service or its addons, we need to split the invoices. This is messy, WHMCS don't provide an API function to split the invoice?!
@@ -330,7 +330,7 @@ function updateTheTotals($invoice, $items) {
         ]);
     
     } catch(\Exception $e) {
-        logActivity("Unable to update totals on invoice #{$invoice->id}. Reason: {$e->getMessage()}", 0);
+        logActivity("Unable to update totals on invoice #{$invoice->id}. Reason: {$e->getMessage()}", $invoice->userid);
     }
 
 }
